@@ -1,0 +1,102 @@
+#include <Arduino.h>
+#include <ESP8266WiFi.h>
+#include <Wire.h>
+#include <SHTSensor.h>
+#include <ModbusIP_ESP8266.h>
+
+#define I2C_SDA_PIN D2
+#define I2C_SCL_PIN D1
+
+const char* ssid     = "Dung 4G đi";
+const char* password = "68686868";
+
+const uint16_t REG_TEMPERATURE = 0;  // PLC đọc 40001
+const uint16_t REG_HUMIDITY    = 1;  // PLC đọc 40002
+
+SHTSensor sht;
+ModbusIP mb;
+
+unsigned long lastMeasureTime = 0;
+unsigned long lastMixingTime = 0;
+unsigned long mixingStartTime = 0;
+
+const unsigned long INTERVAL_NORMAL = 360000;  
+const unsigned long INTERVAL_MIXING = 30000;     
+const unsigned long MIXING_DURATION = 600000;    
+const unsigned long MIXING_CYCLE    = 28800000;  
+
+bool mixingActive = false;  
+
+void setup() {
+  Serial.begin(9600);
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+
+  if (!sht.init()) {
+    Serial.println("Lỗi: Không tìm thấy cảm biến SHT85");
+    while (true) delay(1000);
+  }
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  Serial.print("Đang kết nối WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+  }
+
+  Serial.println("\nĐã kết nối WiFi");
+  Serial.print("ESP IP động: ");
+  Serial.println(WiFi.localIP());
+
+  mb.server();
+
+  mb.onConnect([](IPAddress ip) {
+    Serial.print("Modbus client kết nối từ: ");
+    Serial.println(ip);
+    return true;
+  });
+s
+  lastMeasureTime = millis();
+  lastMixingTime = millis();
+}
+
+void loop() {
+  mb.task(); 
+
+  unsigned long now = millis();
+
+  if (!mixingActive && (now - lastMixingTime >= MIXING_CYCLE)) {
+    mixingActive = true;
+    mixingStartTime = now;
+    lastMixingTime = now;
+    lastMeasureTime = 0; 
+    Serial.println("Bắt đầu chế độ đảo trộn");
+  }
+
+  if (mixingActive && (now - mixingStartTime >= MIXING_DURATION)) {
+    mixingActive = false;
+    lastMeasureTime = now;
+    Serial.println("Kết thúc chế độ đảo trộn");
+  }
+
+  unsigned long interval = mixingActive ? INTERVAL_MIXING : INTERVAL_NORMAL;
+
+  if (now - lastMeasureTime >= interval) {
+    if (sht.readSample()) {
+      float temp = sht.getTemperature();
+      float hum  = sht.getHumidity() ;
+
+      uint16_t t = (uint16_t)(temp * 100);
+      uint16_t h = (uint16_t)(hum * 100);
+
+      mb.Hreg(REG_TEMPERATURE, t);
+      mb.Hreg(REG_HUMIDITY, h);
+
+      Serial.printf("Gửi Modbus: T = %.2f °C, H  = %.2f %%\n", temp, hum);
+    } else {
+      Serial.println("Lỗi khi đọc cảm biến");
+    }
+    lastMeasureTime = now;
+  }
+}
