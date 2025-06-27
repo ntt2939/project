@@ -22,7 +22,7 @@ unsigned long mixingStartTime = 0;
 
 const unsigned long INTERVAL_NORMAL = 360000;  
 const unsigned long INTERVAL_MIXING = 30000;     
-const unsigned long MIXING_DURATION = 600000;    
+const unsigned long MIXING_DURATION = 300000;    
 const unsigned long MIXING_CYCLE    = 28800000;  
 
 bool mixingActive = false;  
@@ -32,7 +32,7 @@ void setup() {
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
 
   if (!sht.init()) {
-    Serial.println("Lỗi: Không tìm thấy cảm biến SHT85");
+    Serial.println("Lỗi: Không tìm thấy cảm biến SHT30");
     while (true) delay(1000);
   }
 
