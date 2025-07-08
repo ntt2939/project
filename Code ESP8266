@@ -7,11 +7,11 @@
 #define I2C_SDA_PIN D2
 #define I2C_SCL_PIN D1
 
-const char* ssid     = "Dung 4G đi";
-const char* password = "68686868";
+const char* ssid     = "iPhone";
+const char* password = "123456789";
 
-const uint16_t REG_TEMPERATURE = 0;  // PLC đọc 40001
-const uint16_t REG_HUMIDITY    = 1;  // PLC đọc 40002
+const uint16_t REG_TEMPERATURE = 0;  // thanh ghi 0-1
+const uint16_t REG_HUMIDITY    = 2;  // thanh ghi 2-3
 
 SHTSensor sht;
 ModbusIP mb;
@@ -20,49 +20,57 @@ unsigned long lastMeasureTime = 0;
 unsigned long lastMixingTime = 0;
 unsigned long mixingStartTime = 0;
 
-const unsigned long INTERVAL_NORMAL = 360000;  
-const unsigned long INTERVAL_MIXING = 30000;     
-const unsigned long MIXING_DURATION = 300000;    
-const unsigned long MIXING_CYCLE    = 28800000;  
+const unsigned long INTERVAL_NORMAL = 18000;
+const unsigned long INTERVAL_MIXING = 600;
+const unsigned long MIXING_DURATION = 6000;
+const unsigned long MIXING_CYCLE    = 288000;
 
-bool mixingActive = false;  
+bool mixingActive = false;
+
+union FloatUnion {
+  float value;
+  uint8_t bytes[4];
+};
 
 void setup() {
   Serial.begin(9600);
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
 
   if (!sht.init()) {
-    Serial.println("Lỗi: Không tìm thấy cảm biến SHT30");
-    while (true) delay(1000);
+    Serial.println("Không tìm thấy cảm biến SHT85");
+    while (1) delay(1000);
   }
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
-
-  Serial.print("Đang kết nối WiFi");
+  Serial.print("Kết nối WiFi");
   while (WiFi.status() != WL_CONNECTED) {
     Serial.print(".");
     delay(500);
   }
-
   Serial.println("\nĐã kết nối WiFi");
-  Serial.print("ESP IP động: ");
+  Serial.print("IP: ");
   Serial.println(WiFi.localIP());
 
   mb.server();
 
   mb.onConnect([](IPAddress ip) {
-    Serial.print("Modbus client kết nối từ: ");
+    Serial.print("Client Modbus kết nối: ");
     Serial.println(ip);
     return true;
   });
-s
+
+  // Khởi tạo 4 thanh ghi: 0-1 cho nhiệt độ, 2-3 cho độ ẩm
+  for (int i = 0; i < 4; i++) {
+    mb.addHreg(i, 0);
+  }
+
   lastMeasureTime = millis();
   lastMixingTime = millis();
 }
 
 void loop() {
-  mb.task(); 
+  mb.task();
 
   unsigned long now = millis();
 
@@ -70,14 +78,14 @@ void loop() {
     mixingActive = true;
     mixingStartTime = now;
     lastMixingTime = now;
-    lastMeasureTime = 0; 
-    Serial.println("Bắt đầu chế độ đảo trộn");
+    lastMeasureTime = 0;
+    Serial.println("Bắt đầu đảo trộn");
   }
 
   if (mixingActive && (now - mixingStartTime >= MIXING_DURATION)) {
     mixingActive = false;
     lastMeasureTime = now;
-    Serial.println("Kết thúc chế độ đảo trộn");
+    Serial.println("Kết thúc đảo trộn");
   }
 
   unsigned long interval = mixingActive ? INTERVAL_MIXING : INTERVAL_NORMAL;
@@ -85,17 +93,29 @@ void loop() {
   if (now - lastMeasureTime >= interval) {
     if (sht.readSample()) {
       float temp = sht.getTemperature();
-      float hum  = sht.getHumidity() ;
+      float hum  = sht.getHumidity() * 0.82;
 
-      uint16_t t = (uint16_t)(temp * 100);
-      uint16_t h = (uint16_t)(hum * 100);
+      // Chuyển float sang 4 byte
+      FloatUnion tempUnion, humUnion;
+      tempUnion.value = temp;
+      humUnion.value = hum;
 
-      mb.Hreg(REG_TEMPERATURE, t);
-      mb.Hreg(REG_HUMIDITY, h);
+  
+      uint16_t temp_high = (tempUnion.bytes[0] << 8) | tempUnion.bytes[1];
+      uint16_t temp_low  = (tempUnion.bytes[2] << 8) | tempUnion.bytes[3];
 
-      Serial.printf("Gửi Modbus: T = %.2f °C, H  = %.2f %%\n", temp, hum);
+      uint16_t hum_high  = (humUnion.bytes[0] << 8) | humUnion.bytes[1];
+      uint16_t hum_low   = (humUnion.bytes[2] << 8) | humUnion.bytes[3];
+
+      mb.Hreg(REG_TEMPERATURE, temp_high);
+      mb.Hreg(REG_TEMPERATURE + 1, temp_low);
+
+      mb.Hreg(REG_HUMIDITY, hum_high);
+      mb.Hreg(REG_HUMIDITY + 1, hum_low);
+
+      Serial.printf("Gửi Modbus REAL - Temp: %.2f °C | Humi: %.2f %%\n", temp, hum);
     } else {
-      Serial.println("Lỗi khi đọc cảm biến");
+      Serial.println("Lỗi đọc cảm biến");
     }
     lastMeasureTime = now;
   }
